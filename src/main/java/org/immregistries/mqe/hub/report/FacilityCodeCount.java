@@ -13,9 +13,10 @@ import javax.persistence.Table;
 import javax.persistence.UniqueConstraint;
 
 @Entity
-@Table(name = "FACILITY_CODE_COUNTS", uniqueConstraints = @UniqueConstraint(name = "UNIQUE_CODE_COUNT", columnNames = {
-    "ATTRIBUTE", "FACILITY_MESSAGE_COUNTS_ID", "CODE_TYPE", "CODE_VALUE"}))
-public class CodeCount {
+@Table(name = "FACILITY_CODE_COUNTS")
+//, uniqueConstraints = @UniqueConstraint(name = "UNIQUE_CODE_COUNT", columnNames = {
+//    "ATTRIBUTE", "FACILITY_MESSAGE_COUNTS_ID", "CODE_TYPE", "CODE_VALUE"}))
+public class FacilityCodeCount {
 
   @Id
   @SequenceGenerator(name = "CODE_COUNT_GENERATOR", sequenceName = "CODE_COUNT_SEQ", allocationSize = 100)
@@ -27,17 +28,20 @@ public class CodeCount {
   @ManyToOne
   @JoinColumn(name = "FACILITY_MESSAGE_COUNTS_ID")
   private FacilityMessageCounts facilityMessageCounts;
-
-  @Column(name = "CODE_TYPE")
   private String codeType;
-
   private String origin;
-
   private String attribute;
-
-  @Column(name = "CODE_VALUE")
+  private String codeStatus;
   private String codeValue;
   private int codeCount;
+
+  public String getCodeStatus() {
+    return codeStatus;
+  }
+
+  public void setCodeStatus(String codeStatus) {
+    this.codeStatus = codeStatus;
+  }
 
   public long getId() {
     return id;

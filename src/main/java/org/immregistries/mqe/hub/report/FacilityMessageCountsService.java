@@ -2,6 +2,7 @@ package org.immregistries.mqe.hub.report;
 
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import org.apache.commons.lang3.StringUtils;
@@ -45,44 +46,69 @@ public class FacilityMessageCountsService {
       facility = "MQE";
     }
 
-    FacilityMessageCounts metrics = facilityMessageCountsRepo.findByUsernameEqualsAndFacilityNameAndUploadDateGreaterThanEqualAndUploadDateLessThanEqual(username, facility, dayStart, dayEnd);
+    List<FacilityMessageCounts> metricsList = facilityMessageCountsRepo.findByUsernameEqualsAndFacilityNameAndUploadDateGreaterThanEqualAndUploadDateLessThanEqual(username, facility, dayStart, dayEnd);
     logger.info("Metrics found for " + facility + " dayStart: " + dayStart + " dayEnd: " + dayEnd);
-    logger.info("Metrics: " + metrics);
+    logger.info("Metrics: " + metricsList);
     MqeMessageMetrics out = new MqeMessageMetrics();
-    if (metrics == null) {
+
+    if (metricsList == null) {
       return out;
     }
 
+    int patientCount = 0;
+    int messageHeaderCount = 0;
+    int vaccinationCount = 0;
+
+    Map<MqeDetection, Integer> detectionCounts = out.getAttributeCounts();
+    Map<CollectionBucket, Integer> codes = new HashMap<>();
+    Map<VaccineBucket, Integer> vbList = new HashMap<>();
+
+    for (FacilityMessageCounts fmc : metricsList) {
+      patientCount += fmc.getPatientCount();
+      messageHeaderCount += fmc.getPatientCount();
+      vaccinationCount += fmc.getVaccinationCount();
+
+      for (FacilityDetections sam : fmc.getDetectionMetrics()) {
+        Detection ma = Detection.getByMqeErrorCodeString(sam.getMqeDetectionCode());
+        //need to do set math, adding to the hash entry for each
+        Integer dc = detectionCounts.get(ma);
+        if (dc == null) {
+          dc = 0;
+        }
+        dc += sam.getAttributeCount();
+        detectionCounts.put(ma, dc);
+      }
+
+      List<FacilityVaccineCounts> vaccines = fmc.getFacilityVaccineCounts();
+      logger.info("Vaccine counts: " + vaccines);
+      for (FacilityVaccineCounts vc : vaccines) {
+        VaccineBucket vb = new VaccineBucket(vc.getVaccineCvx(), vc.getAge(), vc.isAdministered(), vc.getCount());
+        Integer vbc = vbList.get(vb);
+        if (vbc != null) {
+          vb.setCount(vb.getCount() + vbc);
+        }
+        vbList.put(vb, vb.getCount());
+      }
+
+      List<FacilityCodeCount> codesExisting = fmc.getCodes();
+//      logger.info("SM Codes: " + codesExisting);
+      for (FacilityCodeCount sam : codesExisting) {
+        CollectionBucket cc = new CollectionBucket(sam.getCodeType(), sam.getAttribute(), sam.getCodeValue(), sam.getCodeCount());
+        Integer ccc = codes.get(cc);
+        if (ccc != null) {
+          cc.setCount(cc.getCount()+ccc);
+        }
+        codes.put(cc, cc.getCount());
+      }
+
+    }
+
     out.setProvider(facility);
-    out.getObjectCounts().put(VxuObject.PATIENT, metrics.getPatientCount());
-    out.getObjectCounts().put(VxuObject.MESSAGE_HEADER, metrics.getPatientCount());
-    out.getObjectCounts().put(VxuObject.VACCINATION, metrics.getVaccinationCount());
-    Map<MqeDetection, Integer> attrCounts = out.getAttributeCounts();
-
-    for (FacilityDetections sam : metrics.getDetectionMetrics()) {
-      Detection ma = Detection.getByMqeErrorCodeString(sam.getMqeDetectionCode());
-      attrCounts.put(ma, sam.getAttributeCount());
-    }
-
-    List<CodeCount> codesExisting = metrics.getCodes();
-    logger.info("SM Codes: " + codesExisting);
-    List<CollectionBucket> codes = new ArrayList<>();
-    for (CodeCount sam : codesExisting) {
-      CollectionBucket cc = new CollectionBucket(sam.getCodeType(), sam.getAttribute(),
-          sam.getCodeValue(), sam.getCodeCount());
-      codes.add(cc);
-    }
-    out.getCodes().setCodeCountList(codes);
-
-    List<FacilityVaccineCounts> vaccines = metrics.getFacilityVaccineCounts();
-    logger.info("Vaccine counts: " + vaccines);
-    List<VaccineBucket> vbList = new ArrayList<>();
-    for (FacilityVaccineCounts vc : vaccines) {
-      VaccineBucket vb = new VaccineBucket(vc.getVaccineCvx(), vc.getAge(), vc.isAdministered(),
-          vc.getCount());
-      vbList.add(vb);
-    }
-    out.getVaccinations().addAll(vbList);
+    out.getObjectCounts().put(VxuObject.PATIENT, patientCount);
+    out.getObjectCounts().put(VxuObject.MESSAGE_HEADER, messageHeaderCount);
+    out.getObjectCounts().put(VxuObject.VACCINATION, vaccinationCount);
+    out.getCodes().setCodeCountList(new ArrayList<>(codes.keySet()));
+    out.getVaccinations().addAll(new ArrayList<>(vbList.keySet()));
 
     return out;
   }
@@ -113,7 +139,7 @@ public class FacilityMessageCountsService {
 
     Map<VxuObject, Integer> objectCounts = incomingMetrics.getObjectCounts();
     Map<MqeDetection, Integer> detectionCounts = incomingMetrics.getAttributeCounts();
-    Map<Integer, Integer> patientAgeCounts = incomingMetrics.getPatientAgeCounts();
+//    Map<Integer, Integer> patientAgeCounts = incomingMetrics.getPatientAgeCounts();
 
     for (VxuObject io : objectCounts.keySet()) {
       Integer count = objectCounts.get(io);
@@ -137,6 +163,7 @@ public class FacilityMessageCountsService {
       if (detection == null) {
         continue;
       }
+
       //find the right metrics object...
       List<FacilityDetections> dms = metrics.getDetectionMetrics();
       Integer count = detectionCounts.get(detection);
@@ -164,18 +191,24 @@ public class FacilityMessageCountsService {
       }
     }
 
+    //This is... from the incoming message.
     List<CollectionBucket> codes = incomingMetrics.getCodes().getCodeCountList();
-    //logger.warn("codes: " + codes);
 
+    //This is from the incoming message, added to a list to keep track of.
     List<CollectionBucket> remainingToProcess = new ArrayList<>(codes);
-    List<CodeCount> counts = metrics.getCodes();
 
-    //		for (CodeBucket cb : codes.getCodeCountList()) {
-    //			//look and see if it already is represented in the set.  add to it if it is, add it if its not.
-    for (CodeCount cc : counts) {
-      CollectionBucket cb = new CollectionBucket(cc.getCodeType(), cc.getAttribute(),
-          cc.getCodeValue());
+    //This is the set of already existing codes in the database.
+    List<FacilityCodeCount> counts = metrics.getCodes();
+
+    //		loop over the existing codes that we know about.
+    for (FacilityCodeCount cc : counts) {
+      //Convert it from the DB object to a "collection bucket"
+      CollectionBucket cb = new CollectionBucket(cc.getCodeType(), cc.getAttribute(), cc.getCodeValue());
+      cb.setSource(cc.getOrigin());
+      //Find the collection bucket in the existing code list... b/c this is how we tell if it already exists???
       int idx = codes.indexOf(cb);
+
+      //If it's an entry in the set already, just aggregate it, and remove it from the "to be processed" list.
       if (idx > -1) {
         //add the counts to the list.
         CollectionBucket cbIn = codes.get(idx);
@@ -186,12 +219,13 @@ public class FacilityMessageCountsService {
 
     for (CollectionBucket bucket : remainingToProcess) {
       //none of these are in the db yet.
-      CodeCount cc = new CodeCount();
+      FacilityCodeCount cc = new FacilityCodeCount();
       cc.setAttribute(bucket.getAttribute());
       VxuField f = VxuField.getByName(bucket.getTypeCode());
       cc.setCodeType(f.toString());
       cc.setOrigin(f.getHl7Locator());
       cc.setCodeValue(bucket.getValue());
+      cc.setCodeStatus(bucket.getStatus());
       cc.setCodeCount(bucket.getCount());
       cc.setFacilityMessageCounts(metrics);
       metrics.getCodes().add(cc);
@@ -200,9 +234,9 @@ public class FacilityMessageCountsService {
     this.aggregateVaccineCounts(metrics, incomingMetrics.getVaccinations().getCodeCountList());
 
     saveMetrics(metrics);
-    logger.info("Metrics: " + metrics);
+//    logger.info("Metrics: " + metrics);
     facilityMessageCountsRepo.save(metrics);
-    //facilityMessageCountsRepo.flush();
+//    facilityMessageCountsRepo.flush();
 
     return metrics;
   }
